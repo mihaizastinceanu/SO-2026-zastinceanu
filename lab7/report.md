@@ -1,18 +1,31 @@
-# Labs 7 and 8 – Processes, Redirection, a Pipe (Linux) and the Same Calls in xv6
+# Lab 7 – Three Small Programs: Processes, Redirection, a Pipe (Linux)
 
-Zastinceanu Mihai, FAF-243. The full report with all screenshots is the .docx file in this folder.
+Zastinceanu Mihai, FAF-243. The complete report with all figures is the .docx file.
 
-## Purpose of the work
+## AIM OF THE WORK
 
-Lab 7: answer three questions from the lecture by running small C programs on Linux: how is a process born (fork + exec + wait), what is a zombie, where does printf write (descriptors and redirection), and how does `ls | wc -l` work (pipe + dup).
+### Purpose of the practical work
 
-Lab 8: run the same fork/exec/wait program inside xv6, the OS built during the semester, to see that the calls are the same, and make two processes talk through pipes (pingpong); optionally, the concurrent prime sieve (primes).
+The purpose of the work is to answer three questions of the lecture by running small C programs on Linux: how a process is born, where printf writes, and how the command `ls | wc -l` works [1]. The programs were compiled with gcc 15.2.0 and the options -Wall -Wextra, without warnings, on the course virtual machine (Ubuntu 26.04.1 LTS, Linux 7.0.0-34-generic).
 
-Environment: the course VirtualBox VM, Ubuntu 26.04.1 LTS, Linux 7.0.0-34-generic, gcc 15.2.0 (all programs compiled with `-Wall -Wextra` without warnings); xv6-riscv commit `06aad25`, riscv64-linux-gnu-gcc 15.2.0 with `-Werror`, QEMU 10.2.1. Figures are screenshots of the VM terminal, numbered lab.part.n.
+### Problem statement
 
-## Lab 7. Three Small Programs (Linux)
+The following tasks have to be solved:
 
-### Part 1. fork + exec + wait
+- to run a program that does what the shell does for ls -l: fork, exec and wait
+- to create a zombie process on purpose and to observe it in the process table
+- to redirect the output of a child to a file with close and open
+- to build the pipeline ls /etc | wc -l with pipe and dup, and to break it on purpose
+
+## 1 FORK, EXEC AND WAIT
+
+### 1.1 Theoretical background
+
+A new process is created by fork, which makes a copy of the calling process; the copy receives the return value 0 and the original receives the PID of the copy [2]. The function execlp replaces the program of the process with another one, searched in PATH, and does not return when it succeeds [3]. The parent waits for the end of the child with waitpid, which also returns its exit status, extracted with WEXITSTATUS [4].
+
+### 1.2 Work performed
+
+The program run.c (Listing 1.1) was compiled and run (Figure 1.1): the parent printed its PID 39667, the child printed its PID 39668 and its parent 39667, became ls -l, and the parent reported the status 0.
 
 ```
 #include <stdio.h>
@@ -43,44 +56,49 @@ int main(void)
     return 0;
 }
 ```
+*Listing 1.1 – The program run.c*
 
-*Figure 7.1.1 – run.c compiled and run: the child becomes ls -l (screenshot in the .docx report)*
+*Figure 1.1 – run.c compiled and run: the child becomes ls -l*
 
-For steps 1.3 and 1.4 the execlp line was replaced (copies `run_date.c` and `run_nosuch.c`, so that the submitted `run.c` stays the original):
+For the next two steps the line of execlp was replaced in two copies of the program, run_date.c and run_nosuch.c, so that run.c stays in its original form (Figure 1.2). With date the child printed the date and ended with the status 0. With nosuchprog the child printed "exec: No such file or directory" and the parent reported the status 127.
 
-*Figure 7.1.2 – The child runs date, then a program that does not exist (screenshot in the .docx report)*
+*Figure 1.2 – The child runs date, then a program that does not exist*
 
-**1. The line perror("exec") is in the child, right after execlp. Why is it printed only with nosuchprog?**
+### 1.3 Answers to the questions
 
-A successful exec replaces the whole program of the child (code, data, stack) with `ls` or `date`; the code of run, including the perror line, no longer exists in that process, so exec never returns. Only when exec fails (no file `nosuchprog` in PATH, ENOENT) does it return -1, and then the next line runs: `exec: No such file or directory`.
+Question 1. A successful exec replaces the whole program of the child (code, data and stack) with ls or date, so the line perror("exec") no longer exists in that process and is never executed. Only when exec fails, as with nosuchprog, does it return, and the next line prints the error.
 
-**2. Which number does the child print as "my parent", and whose PID is it?**
+Question 2. The child prints as its parent the PID 39667, which is the PID printed by the parent itself, the process run that called fork. It is not the shell, which has the PID 28913.
 
-In Figure 7.1.1 the child prints `my parent is 39667`, which is the PID the parent printed (`parent: my PID is 39667`): the `run` process that called fork. It is not the shell (the shell is 28913).
+Question 3. With ls (and with date) the parent sees the status 0, the exit code of the program. With nosuchprog it sees the status 127, the value of exit(127) after the failed exec, which is also the code that bash uses for a command that is not found.
 
-**3. What status does the parent see with ls, and what status with nosuchprog?**
+## 2 A ZOMBIE ON PURPOSE
 
-With `ls` (and `date`) status 0, the exit code of the program. With `nosuchprog` status 127: the child's own `exit(127)` after the failed exec, the same code bash uses for "command not found". `WEXITSTATUS(status)` extracts it from the status word.
+### 2.1 Theoretical background
 
-### Part 2. A zombie, on purpose
+When a process ends, the kernel keeps its entry in the process table, with the PID and the exit status, until the parent reads the status with wait. During this time the process is a zombie and has the state Z [4].
 
-```
-    int status;
-    sleep(20);                                   /* the new line */
-    waitpid(pid, &status, 0);                    /* step 3: wait for the child */
-```
+### 2.2 Work performed
 
-*Figure 7.2.1 – The zombie in ps, and the process table 20 seconds later (screenshot in the .docx report)*
+The copy zombie.c differs from run.c only by the line sleep(20) before waitpid. The program was started in the background, and the process table was printed after 2 seconds and again after 20 seconds (Figure 2.1).
 
-**1. Which letter does ls have in the STAT column, and what does it mean?**
+*Figure 2.1 – The zombie in ps, and the process table 20 seconds later*
 
-`Z` – zombie, shown as `[ls] <defunct>` with PPID 39860 (./zombie). ls has finished, but the kernel keeps its process-table entry (PID and exit status) until the parent collects it with wait.
+### 2.3 Answers to the questions
 
-**2. After 20 seconds, is the [ls] <defunct> line still there? Which line of zombie.c made it disappear?**
+Question 1. ls has the letter Z in the column STAT and is shown as [ls] <defunct>, with the PPID 39860 of the process zombie. Z means a zombie: the process has ended, but its entry remains until the parent waits for it.
 
-No. `waitpid(pid, &status, 0);` (line 25 of zombie.c), executed after `sleep(20)` returned, read the status and let the kernel free the entry; then zombie itself ended (`[1]+ Done`).
+Question 2. After 20 seconds the line [ls] <defunct> is gone. It disappeared because of the line `waitpid(pid, &status, 0);` (line 25 of zombie.c), executed when sleep(20) returned; then the process zombie itself ended.
 
-### Part 3. Redirection: ls -l > out.txt
+## 3 REDIRECTION
+
+### 3.1 Theoretical background
+
+The functions open and dup always return the lowest free file descriptor [5]. The descriptors remain open across exec, so a program started after a redirection writes to the same descriptor number as usual, but the number now refers to another file. This is how the shell implements `ls -l > out.txt`.
+
+### 3.2 Work performed
+
+The program redirect.c (Listing 3.1) closes the descriptor 1 in the child, opens out.txt and runs ls -l (Figure 3.1).
 
 ```
 #include <stdio.h>
@@ -107,22 +125,27 @@ int main(void)
     return 0;
 }
 ```
+*Listing 3.1 – The program redirect.c*
 
-*Figure 7.3.1 – redirect: open returns descriptor 1 and the listing goes to out.txt (screenshot in the .docx report)*
+*Figure 3.1 – open returns the descriptor 1, and the listing goes to out.txt*
 
-**1. Which number did open give, and why exactly that one?**
+### 3.3 Answers to the questions
 
-1. open always returns the lowest free descriptor number. 0 (stdin) was still open and 1 had just been closed, so 1 was the lowest free one.
+Question 1. open gave the descriptor 1, because it returns the lowest free number: 0 was still open and 1 had just been closed.
 
-**2. ls was not changed at all. Why does its listing not appear on the screen?**
+Question 2. ls writes to the descriptor 1 as always, and exec kept the open descriptors, so in ls the descriptor 1 is the file out.txt and not the terminal. The message "open gave descriptor 1" appeared on the screen because it was written to the descriptor 2. The listing even contains out.txt with the size 0, because the file was created before ls ran.
 
-ls writes to descriptor 1, as always. exec keeps the open descriptors, so in the new program 1 is the file out.txt, not the terminal. The message "open gave descriptor 1" still appeared because it was written to stderr (2). The listing even contains `out.txt` with size 0: the file was created and truncated before ls ran.
+Question 3. To redirect the errors, the descriptor 2 must be closed before open; then open returns 2.
 
-**3. To redirect the errors instead (like 2> err.txt), which descriptor would you close before open?**
+## 4 A PIPE
 
-Descriptor 2: `close(2)`, then `open("err.txt", ...)` returns 2, and everything the program writes to stderr goes to the file.
+### 4.1 Theoretical background
 
-### Part 4. A pipe: ls /etc | wc -l
+The system call pipe creates a buffer in the kernel with a read end p[0] and a write end p[1] [6]. A reader of a pipe receives the end of file only when all write ends of the pipe are closed, in every process that holds them. Therefore every process must close the ends that it does not use.
+
+### 4.2 Work performed
+
+The program pipeline.c (Listing 4.1) creates one pipe and two children: in ls the descriptor 1 becomes p[1], and in wc the descriptor 0 becomes p[0]. Its result is compared with the shell in Figure 4.1; the optional version with three stages, pipeline3.c (Listing 4.2), was compared in the same way.
 
 ```
 #include <stdio.h>
@@ -163,28 +186,15 @@ int main(void)
     return 0;
 }
 ```
+*Listing 4.1 – The program pipeline.c*
 
-*Figure 7.4.1 – pipeline and pipeline3 compared with the real shell (screenshot in the .docx report)*
+*Figure 4.1 – pipeline and pipeline3 compared with the shell*
 
-Then the line `close(p[1]);` in the parent was commented out (copy `pipeline_broken.c`). The program no longer ended and was stopped with Ctrl-C (Figure 7.4.2). To see why, it was started again in the background and inspected (Figure 7.4.3): ls had already exited, wc was sleeping in `anon_pipe_read`, and the parent still had the write end of the same pipe open as its descriptor 4. As soon as the parent was killed, that last write end closed, wc received end-of-file and printed 244.
+Then the line `close(p[1]);` of the parent was turned into a comment in a copy, pipeline_broken.c. The program did not end and was stopped with Ctrl-C (Figure 4.2). It was started again in the background and inspected (Figure 4.3): ls had already ended, wc was sleeping in the kernel function anon_pipe_read, and the parent still held the write end of the same pipe as its descriptor 4. When the parent was killed, the last write end was closed, wc received the end of file and printed 244.
 
-*Figure 7.4.2 – pipeline with close(p[1]) commented out never ends (stopped with Ctrl-C) (screenshot in the .docx report)*
+*Figure 4.2 – pipeline with close(p[1]) commented out never ends*
 
-*Figure 7.4.3 – wc blocked in anon_pipe_read; killing the parent releases it (screenshot in the .docx report)*
-
-**1. Did ./pipeline and ls /etc | wc -l give the same number?**
-
-Yes: 244 and 244. The optional three-stage version also matched: `./pipeline3` and `ls /usr/bin | grep x | wc -l` both printed 229.
-
-**2. After the change, which of the two children never ends, ls or wc?**
-
-wc. ls wrote its list and exited normally (it is not in the ps output); wc stays in state S.
-
-**3. Why, in one sentence: what is wc waiting for?**
-
-wc reads until end-of-file, and a pipe gives end-of-file only when every write end is closed, but the parent still holds p[1] while it waits for wc, so both wait for each other forever.
-
-#### Optional: pipeline3.c (ls /usr/bin | grep x | wc -l)
+*Figure 4.3 – wc blocked in anon_pipe_read, released when the parent is killed*
 
 ```
 #include <stdio.h>
@@ -243,177 +253,27 @@ int main(void)
     return 0;
 }
 ```
+*Listing 4.2 – The program pipeline3.c for ls /usr/bin | grep x | wc -l*
 
-## Lab 8. The Same Calls, Inside Your Own OS (xv6)
+### 4.3 Answers to the questions
 
-New programs: `user/run.c`, `user/pingpong.c`, `user/primes.c`, each with a line in UPROGS (a TAB at the start, nothing after the backslash). `zombie` is already one of the standard xv6 programs.
+Question 1. ./pipeline and `ls /etc | wc -l` gave the same number, 244. The optional pipeline3 and the command `ls /usr/bin | grep x | wc -l` both gave 229.
 
-*Figure 8.0.1 – The UPROGS lines and the system calls declared in user/user.h (screenshot in the .docx report)*
+Question 2. After the change wc never ends; ls ends normally and is no longer in the process table.
 
-### Part 1. run, inside xv6
+Question 3. wc waits for the end of file on the pipe, which comes only when all write ends are closed, but the parent still holds p[1] while it waits for wc, so the two processes wait for each other forever.
 
-```
-#include "kernel/types.h"
-#include "user/user.h"
+## CONCLUSIONS
 
-// the three steps of the shell, inside xv6:  echo hello from the child
-int
-main(int argc, char *argv[])
-{
-  printf("parent: my pid is %d\n", getpid());
+Starting a program consists of two separate steps: fork copies the current process, and exec replaces the program of the copy. Because exec does not return when it succeeds, the code after it runs only on error, and the exit status travels back to the parent through wait. A child that has ended remains a zombie until its parent waits for it.
 
-  int pid = fork();                     // step 1: copy myself
-  if(pid < 0){
-    printf("fork failed\n");
-    exit(1);
-  }
+Redirection and pipes need no support from the programs: the descriptors are arranged between fork and exec using the rule that open and dup return the lowest free number, and ls or wc simply use the descriptors 0 and 1. Every unused end of a pipe must be closed, because the reader receives the end of file only when all write ends are closed; one forgotten close(p[1]) was enough to block the pipeline forever.
 
-  if(pid == 0){                         // only the child runs this
-    printf("child: my pid is %d\n", getpid());
-    char *args[] = { "echo", "hello", "from", "the", "child", 0 };
-    exec("echo", args);                 // step 2: become echo
-    printf("exec failed\n");            // runs only if exec failed
-    exit(1);
-  }
+## REFERENCES
 
-  int status;
-  wait(&status);                        // step 3: wait for the child
-  printf("parent: child %d ended with status %d\n", pid, status);
-  exit(0);
-}
-```
-
-*Figure 8.1.1 – run in xv6: the child becomes echo (screenshot in the .docx report)*
-
-*Figure 8.1.2 – The child runs ls (args = { "ls", 0 }) (screenshot in the .docx report)*
-
-*Figure 8.1.3 – exec("nosuchprog", args): exec failed, status 1 (screenshot in the .docx report)*
-
-For 1.3 and 1.4 the two lines were changed, rebuilt and run, then `run.c` was restored to the echo version that is submitted.
-
-**1. Write the three calls that run.c uses in xv6 and the three calls run.c used on Linux in Lab 7. What is the same?**
-
-xv6: `fork()`, `exec("echo", args)`, `wait(&status)`. Linux: `fork()`, `execlp("ls", "ls", "-l", NULL)`, `waitpid(pid, &status, 0)`. The idea and the order are the same: copy the process, replace the copy's program, wait for it; `fork` is identical. The differences are only in the library: on Linux `execlp` is a glibc wrapper over the `execve` system call that takes a variable list and searches PATH, and `waitpid` can wait for one specific child, while xv6 `exec` takes an argv array and `wait` waits for any child.
-
-**2. Who prints "hello from the child": the code of run, or echo?**
-
-echo. The child printed `child: my pid is 4` with run's code, then `exec` replaced its program with `/echo`, and echo printed its arguments `hello from the child`, still as process 4.
-
-**3. Why is the status 1 here and 127 on Linux? (Look at the exit line after exec in both programs.)**
-
-The status is whatever the child passes to exit when exec fails: the xv6 run.c has `exit(1)` after exec, the Linux run.c has `exit(127)`. (xv6 `wait` stores the exit value directly; on Linux the value is packed in the status word and read with `WEXITSTATUS`.)
-
-### Part 2. pingpong
-
-```
-#include "kernel/types.h"
-#include "user/user.h"
-
-int
-main(int argc, char *argv[])
-{
-  int p2c[2], c2p[2];     // parent-to-child, child-to-parent
-  char b = 'x';
-
-  pipe(p2c);
-  pipe(c2p);
-
-  if(fork() == 0){
-    close(p2c[1]); close(c2p[0]);       // the ends the child does not use
-    read(p2c[0], &b, 1);                // wait for the ping
-    printf("%d: received ping\n", getpid());
-    write(c2p[1], &b, 1);               // send the byte back
-    exit(0);
-  }
-
-  close(p2c[0]); close(c2p[1]);         // the ends the parent does not use
-  write(p2c[1], &b, 1);                 // ping
-  read(c2p[0], &b, 1);                  // blocks until the child answers
-  printf("%d: received pong\n", getpid());
-  wait(0);
-  exit(0);
-}
-```
-
-*Figure 8.2.1 – pingpong (twice) and the optional primes (screenshot in the .docx report)*
-
-The child (pid 4) prints "received ping" first, then the parent (pid 3) prints "received pong"; the second run gives 6 and 5.
-
-**1. Why do you need TWO pipes, and not one for both directions?**
-
-A pipe is a one-way channel with one buffer: whoever reads first gets the byte. With a single pipe the parent could read back its own ping before the child gets it (or the child its own pong), and there would be no way to tell whose byte it is. One pipe per direction (p2c and c2p) makes every byte go to the right process; it also lets each side close the ends it does not use.
-
-**2. Nothing in your code says "wait until the child has replied". Which call makes the parent wait?**
-
-`read(c2p[0], &b, 1)`. Reading from an empty pipe blocks: the kernel puts the parent to sleep in piperead until the child writes the byte (or every write end is closed). In the same way the child's `read(p2c[0], ...)` blocks until the ping arrives, which is why "ping" is always printed first.
-
-#### Optional: primes
-
-Each stage reads its first number p from the left pipe (it is always a prime), prints it, creates a pipe and a child for the next stage, and forwards only the numbers not divisible by p. Every unused pipe end is closed, otherwise the stages would never see end-of-file and xv6 would run out of descriptors. Output: the 11 primes from 2 to 31 (Figure 8.2.1).
-
-```
-#include "kernel/types.h"
-#include "user/user.h"
-
-// primes: print the primes from 2 to 35 with a chain of processes.
-// Each stage reads its first number p (a prime), prints it, and passes
-// on to the next stage only the numbers that p does not divide.
-
-void
-stage(int left) __attribute__((noreturn));
-
-void
-stage(int left)
-{
-  int p, n;
-  int right[2];
-
-  if(read(left, &p, sizeof(p)) != sizeof(p)){
-    close(left);                        // nothing left: the chain ends here
-    exit(0);
-  }
-  printf("prime %d\n", p);
-
-  pipe(right);
-  if(fork() == 0){
-    close(right[1]);
-    close(left);                        // the next stage reads only from right
-    stage(right[0]);
-  }
-  close(right[0]);
-  while(read(left, &n, sizeof(n)) == sizeof(n)){
-    if(n % p != 0)
-      write(right[1], &n, sizeof(n));
-  }
-  close(left);
-  close(right[1]);                      // EOF for the next stage
-  wait(0);
-  exit(0);
-}
-
-int
-main(int argc, char *argv[])
-{
-  int first[2];
-
-  pipe(first);
-  if(fork() == 0){
-    close(first[1]);
-    stage(first[0]);
-  }
-  close(first[0]);
-  for(int i = 2; i <= 35; i++)
-    write(first[1], &i, sizeof(i));
-  close(first[1]);
-  wait(0);
-  exit(0);
-}
-```
-
-## Conclusions
-
-Starting a program is two separate steps: fork copies the current process, and exec replaces the copy's program. Because exec does not return on success, the code after it runs only on error, and the exit status (0, 127, or 1 in xv6) travels back to the parent through wait. A finished child stays a zombie until its parent waits for it.
-
-Redirection and pipes need no help from the programs: the shell (here our own code) arranges the descriptors between fork and exec using the rule "open/dup returns the lowest free number", and ls or wc simply use 0 and 1. The one rule to remember is to close every unused pipe end: a reader gets end-of-file only when all write ends are closed, and one forgotten `close(p[1])` was enough to block the pipeline forever.
-
-The same program ran almost unchanged inside xv6: `fork`, `exec`, `wait`, `pipe`, `read`, `write` and `close` are the same system calls in our small kernel. pingpong showed that a blocking `read` is a synchronisation tool, and primes showed a chain of processes connected by pipes.
+1. Three Small Programs: Processes, Redirection, a Pipe. Laboratory Work 7, Operating Systems course. FCIM, Technical University of Moldova, 2026.
+2. fork(2). Linux manual page [online]. Available: https://man7.org/linux/man-pages/man2/fork.2.html
+3. exec(3). Linux manual page [online]. Available: https://man7.org/linux/man-pages/man3/exec.3.html
+4. wait(2). Linux manual page [online]. Available: https://man7.org/linux/man-pages/man2/wait.2.html
+5. dup(2). Linux manual page [online]. Available: https://man7.org/linux/man-pages/man2/dup.2.html
+6. pipe(7). Linux manual page [online]. Available: https://man7.org/linux/man-pages/man7/pipe.7.html

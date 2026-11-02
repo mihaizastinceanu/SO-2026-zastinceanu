@@ -1,164 +1,53 @@
-# Labs 5 and 6 – The File System (Linux) and Inside the xv6 File System
+# Lab 6 – Inside the xv6 File System
 
-Zastinceanu Mihai, FAF-243. The full report with all screenshots is the .docx file in this folder.
+Zastinceanu Mihai, FAF-243. The complete report with all figures is the .docx file.
 
-## Purpose of the work
+## AIM OF THE WORK
 
-Lab 5: check on a real Linux system everything from the file-system lecture: the directory tree and the file types, inodes behind the names, hard and symbolic links, permissions (including setuid and the sticky bit), and the disks and the kernel exposed as files.
+### Purpose of the practical work
 
-Lab 6: see the same ideas in the xv6 file system, which implements them in a few hundred readable lines: decode what xv6 `ls` prints, write a `stat` program (`mystat`), measure the limits written in `kernel/fs.h`, and write `find`, which walks the directory tree recursively.
+The purpose of the work is to study the xv6 file system, which has the same ideas as ext4 (inodes, directories as tables, hard links and a journal) in a few hundred readable lines: to interpret what xv6 shows, to write a stat program, to measure the limits written in kernel/fs.h and to write find, which walks the directory tree recursively [1]. The work was done with xv6-riscv commit 06aad25 on the course virtual machine, with the cross compiler riscv64-linux-gnu-gcc 15.2.0 and QEMU 10.2.1.
 
-Environment: the course VirtualBox VM, Ubuntu 26.04.1 LTS, Linux 7.0.0-34-generic, working as the normal user `papa_bear` (`whoami` does not print root); xv6-riscv commit `06aad25`, riscv64-linux-gnu-gcc 15.2.0, QEMU 10.2.1. Figures are screenshots of the VM terminal and are numbered lab.part.n (Figure 5.2.1 is Lab 5, Part 2, first figure).
+### Problem statement
 
-## Lab 5. The File System with Your Own Hands (Linux)
+The following tasks have to be solved:
 
-### Part 1. The tree and the file types
+- to decode the output of ls in xv6: the types, the inode numbers and the sizes
+- to write the program mystat and to follow the link count of a file through ln and rm
+- to find the limits of the file system: the length of a name, the largest file and the layout of the disk
+- to write the program find, which prints every path under a directory whose last component has a given name
 
-*Figure 5.1.1 – The tree, file types, /dev, file and du (screenshot in the .docx report)*
+## 1 READING WHAT XV6 SHOWS
 
-*Figure 5.1.2 – Block and character devices; where /bin points (screenshot in the .docx report)*
+### 1.1 Theoretical background
 
-**1. For each path in the second line, write its type from the first letter of ls -l.**
+In xv6 a directory is a file that contains a table of entries of the type struct dirent: an inode number of 2 bytes and a name of DIRSIZ = 14 bytes. An entry with the inode number 0 is a free slot. The type of a file is stored in its inode and is one of the constants of kernel/stat.h [2].
 
-`/bin` – `l`, symbolic link; `/dev/null` – `c`, character device (major 1, minor 3); `/etc` – `d`, directory; `/etc/passwd` – `-`, regular file; `/tmp` – `d`, directory (`drwxrwxrwt`, with the sticky bit).
+### 1.2 Work performed
 
-**2. What is /bin on your system: a directory or a link, and to where?**
+On a fresh disk, ls listed the root directory, and then the directory a was created and listed (Figure 1.1). Each line contains the name, the type, the inode number and the size. The relevant definitions are shown in Figure 1.2.
 
-A symbolic link: `/bin -> usr/bin` (`readlink -f /bin` → `/usr/bin`). Ubuntu uses the "merged /usr" layout, so `/bin`, `/sbin` and `/lib` all point into `/usr`. `file /bin` also says "symbolic link to usr/bin".
+*Figure 1.1 – ls in the root of a fresh xv6 disk, mkdir a and ls a*
 
-**3. Find one character device and one block device in /dev.**
+*Figure 1.2 – kernel/stat.h, struct dinode and the link count lines of sysfile.c*
 
-Character: `/dev/tty0` (`crw------- root tty 4, 0`) or `/dev/null`. Block: `/dev/sda` (`brw-rw---- root disk 8, 0`), the virtual hard disk; `/dev/sda1`, `/dev/loop0` are block devices too.
+### 1.3 Answers to the questions
 
-**4. Which is bigger on your laptop, /var/log or /usr, and by roughly how much?**
+Question 1. In kernel/stat.h, T_DIR = 1 is a directory, T_FILE = 2 is a regular file and T_DEVICE = 3 is a device, such as console.
 
-`/usr` is 5.6G and `/var/log` is 63M, so `/usr` is about 90 times bigger.
+Question 2. The root directory has the inode number 1 (ROOTINO in kernel/fs.h). The root has no parent, so mkfs writes both . and .. with the inode 1, and the two lines are identical.
 
-### Part 2. Inodes and links
+Question 3. One entry has 16 bytes: 2 bytes for the inode number and 14 bytes for the name. The size 32 corresponds to two entries: . (inode 29, the directory itself) and .. (inode 1, the root).
 
-*Figure 5.2.1 – stat, and a hard link that survives rm of the original name (screenshot in the .docx report)*
+## 2 WRITING MYSTAT
 
-*Figure 5.2.2 – A symbolic link that breaks, and the link count of directories (screenshot in the .docx report)*
+### 2.1 Theoretical background
 
-*Figure 5.2.3 – Size is not space: a 2-byte file and a sparse 1 GB file (screenshot in the .docx report)*
+The library function stat() opens a path and fills a struct stat with the fields dev, ino, type, nlink and size of its inode [2]. The link count nlink is incremented by link and decremented by unlink, and an inode is freed only when it has no names and no open references.
 
-**1. Which number in stat is the inode, and which tells how many names the file has?**
+### 2.2 Work performed
 
-`Inode: 532287` is the inode number; `Links: 1` is the number of names (hard links). After `ln notes.txt hard.txt`, `ls -li` shows the same inode 532287 for both names and the count 2.
-
-**2. After rm notes.txt, why could you still read hard.txt? What does rm really remove?**
-
-Both names point to the same inode; neither is "the original". `rm` calls `unlink()`, which removes one directory entry (one name) and decrements the link count to 1. The inode and its data blocks are freed only when the count reaches 0 and no process has the file open, so `cat hard.txt` still printed `hello`.
-
-**3. Why did cat soft.txt fail at the end, although soft.txt still exists? How big is soft.txt and why exactly that size?**
-
-A symbolic link is a separate file (its own inode, 532293) whose content is just a path. Opening it makes the kernel follow the path `hard.txt`, which no longer exists, so `No such file or directory` (ls shows it in red as a dangling link). Its size is 8 bytes, the length of the text `hard.txt`.
-
-**4. A new directory has 2 links, and 4 after you create two subdirectories. Explain where each link comes from.**
-
-Link 1 is the name `d` in its parent; link 2 is the entry `.` inside `d`, which points to `d` itself. Each subdirectory contains `..`, which points back to `d`, so `x` and `y` add one link each: 4. `ls -lai d` shows `.` with the inode of `d` and `..` with the inode of the parent.
-
-**5. Why does a 2-byte file use 4.0K, and a 1 GB file use 0?**
-
-Disk space is given in whole blocks. ext4 here uses 4096-byte blocks, so the 2-byte `one.txt` takes one block = 8 sectors of 512 bytes = 4.0K. `truncate -s 1G` only sets the size field and allocates no blocks (a sparse file with a hole that reads as zeros), so `du` shows 0 and `stat` shows 0 blocks.
-
-### Part 3. Permissions
-
-*Figure 5.3.1 – chmod 600 / 000 / u+r and the umask (screenshot in the .docx report)*
-
-*Figure 5.3.2 – The box experiment, setuid passwd, sticky /tmp and /etc/shadow (screenshot in the .docx report)*
-
-Predictions for the box experiment (written before running): with `r` only, `ls box` works and `cat box/f` fails; with `x` only, `ls box` fails and `cat box/f` works. Both were correct.
-
-**1. Write 600, 644, 755 and 700 as rwx strings, and give one real use for each.**
-
-600 = `rw-------`: private files, e.g. an SSH private key or `s.txt` here. 644 = `rw-r--r--`: ordinary documents and configuration readable by everyone, e.g. `/etc/passwd`. 755 = `rwxr-xr-x`: programs and public directories, e.g. `/usr/bin/*`, `box` at the end. 700 = `rwx------`: a private directory or a personal script, e.g. `~/.ssh`.
-
-**2. With chmod 000 you own the file but cannot read it. Why does ownership not help?**
-
-For the owner the kernel checks only the owner bits, and they are `---`, so read is denied. Being the owner gives only the right to change the mode, which is what `chmod u+r` did; after it, `cat` worked. (Only root ignores these checks.)
-
-**3. What is your umask, and how does it explain the permissions of new.txt and newdir?**
-
-`0002`. New files are created with 666 minus the mask → 664 = `-rw-rw-r--` (new.txt); new directories with 777 minus the mask → 775 = `drwxrwxr-x` (newdir). The mask removes only write for "others".
-
-**4. Explain the box experiment: what does r allow on a directory, and what does x allow?**
-
-`r` lets you read the list of names: `ls box` printed `f`, but `cat box/f` was denied, because to reach a file inside you must pass through the directory. `x` lets you pass through (search) it and use a name you already know: `cat box/f` printed `hi`, but `ls box` gave "cannot open directory".
-
-**5. What do the s in /usr/bin/passwd and the t in /tmp mean, and why does passwd need the s?**
-
-`s` (`-rwsr-xr-x root`) is setuid: the program runs with the user ID of the file's owner, root, whoever starts it. passwd must change the password hash in `/etc/shadow`, which is `-rw-r----- root shadow` (I got Permission denied reading it), so without setuid a normal user could not change their password. `t` (`drwxrwxrwt`) is the sticky bit: everyone may create files in /tmp, but only a file's owner (or root) may delete or rename it.
-
-### Part 4. Disks and the kernel as files
-
-*Figure 5.4.1 – lsblk, df, mount, CPU count and memory (screenshot in the .docx report)*
-
-*Figure 5.4.2 – /proc/self/status and /proc/self/fd (screenshot in the .docx report)*
-
-**1. Draw your disk: disk name, partitions, which one is mounted at / and with what file system type.**
-
-See the drawing below. One 50 GB virtual disk `sda`: `sda1` (1 MB, the BIOS boot partition for GRUB, no file system) and `sda2` (50 GB, ext4, mounted at `/`). There is also `sr0` (the virtual CD drive) and read-only `loop` devices for snap packages.
-
-**2. How full is your root file system?**
-
-`/dev/sda2` has 49G, 14G used, 33G available: 31% (lsblk -f: 29% / 32.4G free).
-
-**3. How many CPU cores and how much RAM does your laptop have, according to /proc?**
-
-`grep -c processor /proc/cpuinfo` → 4 cores; `MemTotal: 3479680 kB` ≈ 3.3 GiB (the VM is given 4096 MB; the kernel keeps part of it for itself and does not count it).
-
-**4. /proc/self/status showed the name of a program. Which one, and why that one?**
-
-`Name: head`. `/proc/self` is a link that each process sees as its own `/proc/<pid>`; the process that opened the file was `head`, so it saw its own status. In the same way `ls -l /proc/self/fd` showed the descriptors of `ls`: 0, 1, 2 on the terminal `/dev/pts/0` and 3 for the directory ls was reading.
-
-```
-sda   50G  disk  (/dev/sda, VirtualBox virtual disk)
-├─sda1   1M  part  BIOS boot partition (no file system)
-└─sda2  50G  part  ext4, UUID be4cfdd9-...  mounted at  /   (14G of 49G used, 31%)
-sr0   1024M  rom   virtual CD/DVD drive
-loop0..loop21      snap packages (squashfs, read-only)
-```
-
-### Stretch tasks (all four)
-
-*Figure 5.5.1 – (a) Magic numbers: gzip and ELF (screenshot in the .docx report)*
-
-(a) `file` ignores the name `notes.txt` and reads the first bytes: `1f 8b` is the gzip magic number (`08` = deflate), so it says "gzip compressed data, was passwd". An ELF executable starts with `7f 45 4c 46` = `\x7fELF`.
-
-*Figure 5.5.2 – (b) setuid programs on the VM (screenshot in the .docx report)*
-
-(b) 17 setuid programs. Besides the classic ones (passwd, su, mount, umount, chsh, chfn, gpasswd, pkexec, fusermount3), this Ubuntu 26.04 VM has some that are not on the usual list: `/usr/lib/cargo/bin/sudo` and `su` (the new Rust sudo-rs), `/usr/bin/sudo.ws` (the classic sudo, renamed), `vmware-user-suid-wrapper`, `ntfs-3g`, `pppd`, `ssh-keysign` and `dbus-daemon-launch-helper`.
-
-*Figure 5.5.3 – (c) Deleting a file that is still open (screenshot in the .docx report)*
-
-(c) After `rm bigfile` the name is gone, but descriptor 3 of the shell still points to it: `3 -> /home/papa_bear/os-lab5/bigfile (deleted)`. The used space stays the same (14681024 KB). Only after `exec 3<&-` closes the last reference does it drop by 51200 KB (exactly the 50 MB) to 14629824 KB.
-
-*Figure 5.5.4 – (d) A 64 MB ext4 file system in a file, mounted with a loop device (screenshot in the .docx report)*
-
-(d) mkfs.ext4 created 16384 inodes in the 64 MB image (`df -i`); 12 are already used (the reserved inodes and lost+found). `df -h` shows 56M of usable size: the rest holds the metadata and the journal.
-
-## Lab 6. Inside the xv6 File System
-
-### Part 1. Read what xv6 shows you
-
-*Figure 6.1.1 – ls in the root of a fresh xv6 disk, mkdir a, ls a (screenshot in the .docx report)*
-
-*Figure 6.1.2 – kernel/stat.h, struct dinode and the link-count lines in sysfile.c (screenshot in the .docx report)*
-
-**1. What do types 1, 2 and 3 mean (kernel/stat.h)?**
-
-`T_DIR 1` – directory, `T_FILE 2` – regular file, `T_DEVICE 3` – device (only `console` here).
-
-**2. Which inode number does the root directory have, and why are . and .. the same there?**
-
-Inode 1 (`ROOTINO 1` in kernel/fs.h). The root has no parent, so mkfs writes both `.` and `..` with inode 1; that is why both lines are `1 1 1024`.
-
-**3. An empty directory a has size 32. How big is one entry, and which two entries does a contain?**
-
-A `struct dirent` is `ushort inum` (2 bytes) + `char name[DIRSIZ]` (14 bytes) = 16 bytes. 32 bytes = two entries: `.` (inode 29, the directory itself) and `..` (inode 1, the root), as `ls a` shows.
-
-### Part 2. Write mystat
+The program user/mystat.c (Listing 2.1) prints the type, the inode number, the number of links and the size of every argument and reports an error on file descriptor 2 for a path that does not exist.
 
 ```
 #include "kernel/types.h"
@@ -195,44 +84,57 @@ main(int argc, char *argv[])
   exit(0);
 }
 ```
+*Listing 2.1 – The program user/mystat.c*
 
-*Figure 6.2.1 – mystat on README, . and console; a hard link, then rm of README (screenshot in the .docx report)*
+The program was used to follow a hard link (Figure 2.1), and the code that changes the link count and frees the blocks was located in the kernel (Figure 2.2).
 
-**1. Paste the outputs after ln and after rm. What changed and what did not?**
+*Figure 2.1 – mystat on README, . and console; a hard link, then rm of README*
 
-After `ln README r2`: `README: file, inode 2, links 2, size 2441 bytes` and the same line for `r2`. After `rm README`: `r2: file, inode 2, links 1, size 2441 bytes`, and `cat r2 | wc` still gives `48 336 2441`. Only the link count changed (1 → 2 → 1); the inode number, size and data stayed the same. (Here `.` shows links 2, not 1 as in the sheet, because `mkdir a` before it added `..` in `a`, which counts as a link to the root: `dp->nlink++; // for ".."` in `create()`.)
+*Figure 2.2 – The decrement of nlink in sys_unlink and the freeing condition in iput*
 
-**2. Find the line in kernel/sysfile.c (sys_unlink) that decrements the link count. When are the data blocks freed?**
+### 2.3 Answers to the questions
 
-`sys_unlink()` starts at line 202; line 244 is `ip->nlink--;`, followed by `iupdate(ip)` and `iunlockput(ip)`. The blocks are not freed there. They are freed in `iput()` (kernel/fs.c, line 350): when the last in-memory reference is dropped (`ip->ref == 1`) and `ip->nlink == 0`, it calls `itrunc(ip)` to free the data blocks and marks the inode free. So, as on Linux, data disappears when there is no name left and no process has the file open.
+Question 1. After `ln README r2` both names show "file, inode 2, links 2, size 2441 bytes". After `rm README`, r2 shows "inode 2, links 1, size 2441 bytes", and `cat r2 | wc` still prints 48 336 2441. Only the link count changed; the inode number, the size and the data stayed the same. The directory . shows 2 links instead of 1 because mkdir a created the entry .. in a, which is a link to the root (dp->nlink++ in create()).
 
-**3. xv6 has no symbolic links and no permissions. Look at struct dinode in kernel/fs.h: which fields does an xv6 inode have?**
+Question 2. sys_unlink begins on line 202 of kernel/sysfile.c, and the link count is decremented on line 244 by `ip->nlink--;`. The data blocks are freed later, in iput() (kernel/fs.c, line 350): when the last reference is released (ref == 1) and nlink == 0, it calls itrunc(ip), which frees the blocks, and marks the inode as free.
 
-`short type`, `short major`, `short minor` (device numbers), `short nlink`, `uint size` and `uint addrs[NDIRECT+1]` (12 direct block numbers and 1 indirect). No owner, group, mode bits or timestamps, which is why xv6 has no permissions.
+Question 3. struct dinode contains the fields type, major, minor, nlink, size and addrs[NDIRECT + 1] (12 direct block addresses and one indirect). It has no owner, no group, no permission bits and no timestamps.
 
-*Figure 6.2.2 – nlink-- in sys_unlink and the freeing condition in iput (screenshot in the .docx report)*
+## 3 MEASURING THE LIMITS
 
-### Part 3. Measure the limits
+### 3.1 Theoretical background
 
-*Figure 6.3.1 – The constants in fs.h and the nmeta line printed by mkfs (screenshot in the .docx report)*
+An xv6 inode addresses its data with NDIRECT = 12 direct block numbers and one indirect block, which holds NINDIRECT = BSIZE / 4 further block numbers. The disk image is created by mkfs, which prints its layout in the nmeta line [2].
 
-*Figure 6.3.2 – A name longer than DIRSIZ (screenshot in the .docx report)*
+### 3.2 Work performed
 
-**1. What does ls show for averyveryverylongname, and which constant explains it?**
+The constants were read from kernel/fs.h and the layout of the disk was printed during the build (Figure 3.1); then a directory with a long name was created in xv6 (Figure 3.2).
 
-`averyveryveryl` – only the first 14 characters. `DIRSIZ 14` is the size of the name field in a directory entry, so longer names are cut to 14 characters when the entry is written.
+*Figure 3.1 – The constants of fs.h and the nmeta line printed by mkfs*
 
-**2. Compute the largest file xv6 can hold.**
+*Figure 3.2 – A name longer than DIRSIZ*
 
-`BSIZE` = 1024 bytes, `NDIRECT` = 12, one indirect block holds `NINDIRECT` = 1024 / 4 = 256 block numbers. MAXFILE = 12 + 256 = 268 blocks, and 268 × 1024 = 274 432 bytes (268 KiB).
+### 3.3 Answers to the questions
 
-**3. From the nmeta line: how many blocks does the whole disk have, and how many are for the log, the inodes, and the data?**
+Question 1. ls shows averyveryveryl, only the first 14 characters of the name, because the name field of a directory entry has DIRSIZ = 14 bytes.
 
-`nmeta 47 (boot, super, log blocks 31, inode blocks 13, bitmap blocks 1) blocks 1953 total 2000`. The disk has 2000 blocks of 1 KB: 1 boot + 1 superblock + 31 log + 13 inode + 1 bitmap = 47 metadata blocks, and 1953 data blocks.
+Question 2. With BSIZE = 1024 bytes, NDIRECT = 12 and NINDIRECT = 1024 / 4 = 256, the largest file is given by formula (3.1):
 
-### Part 4. Write find
+    MAXFILE × BSIZE = (12 + 1024 / 4) × 1024 = 268 × 1024 = 274 432 bytes    (3.1)
 
-`find` starts from `user/ls.c`: open the directory, read `struct dirent` entries, build the full path, `stat` it. It skips free slots (`inum == 0`), never recurses into `.` and `..`, compares the last component with `strcmp`, and closes every directory before returning (only 16 open files per process). The stretch option `-n` prints the inode number next to each path.
+where 12 is the number of direct blocks, 1024 / 4 is the number of block addresses of 4 bytes in the indirect block, and 1024 is the size of a block. The largest file has 268 KiB.
+
+Question 3. The line "nmeta 47 (boot, super, log blocks 31, inode blocks 13, bitmap blocks 1) blocks 1953 total 2000" shows a disk of 2000 blocks: 1 boot block, 1 superblock, 31 log blocks, 13 inode blocks and 1 bitmap block, which are 47 metadata blocks, and 1953 data blocks.
+
+## 4 WRITING FIND
+
+### 4.1 Theoretical background
+
+A recursive traversal opens a directory, reads its entries, builds the full path of each entry and calls itself for the subdirectories. The entries . and .. must be skipped, otherwise the walk never ends, and every opened directory must be closed, because an xv6 process can have only 16 open files [2], [4].
+
+### 4.2 Work performed
+
+The program user/find.c (Listing 4.1) starts from the structure of user/ls.c. It skips the entries with inum == 0, compares the last component of each path with the searched name using strcmp, and closes every directory before returning. The optional third argument -n also prints the inode number.
 
 ```
 #include "kernel/types.h"
@@ -319,15 +221,21 @@ main(int argc, char *argv[])
   exit(0);
 }
 ```
+*Listing 4.1 – The program user/find.c*
 
-*Figure 6.4.1 – find tests on a fresh disk, and the -n stretch option (screenshot in the .docx report)*
+The test of the handout was run on a fresh disk (Figure 4.1). `find . r2` printed ./a/b/r2, ./a/r2 and ./r2, and `find a b` printed a/b. With -n the inode numbers are 31, 32 and 3; mystat shows that cat also has the inode 3 and 2 links, so only ./r2, created with `ln cat r2`, is the same file as cat.
 
-`find . r2` printed `./a/b/r2`, `./a/r2`, `./r2`, and `find a b` printed `a/b`, as expected. With `-n`: `./a/b/r2 31`, `./a/r2 32`, `./r2 3`. `mystat cat` shows inode 3 with 2 links, so only `./r2` is the same file as `cat` (it was made with `ln cat r2`); the other two are different files that just have the same name.
+*Figure 4.1 – find on a fresh disk, and the option -n*
 
-## Conclusions
+## CONCLUSIONS
 
-Lab 5 showed that a file name is only a directory entry pointing to an inode, and that the inode holds the real information: type, owner, mode, size, link count, blocks. A hard link is a second name for the same inode, a symbolic link is a small file containing a path, and `rm` only removes a name. Space is counted in blocks, so size and space differ in both directions (a 2-byte file takes 4K, a sparse 1 GB file takes nothing), and an open file keeps its blocks even after its last name is gone.
+The xv6 file system shows in a small form the ideas of a real one: a directory is a file of 16-byte entries, an inode holds the type, the link count, the size and 13 block addresses, unlink only decrements the link count, and iput frees the blocks when nothing refers to the inode any more. The constants of kernel/fs.h fix the limits of the system: names of 14 characters, files of at most 268 KiB and a disk of 2000 blocks.
 
-Permissions are checked by class (owner, group, others) and mean different things for files and directories (`r` = list, `x` = pass through). setuid and the sticky bit solve two real problems: letting a user change a root-owned file in a controlled way, and sharing /tmp safely. Disks, partitions and even the current process (`/proc/self`) are visible as files.
+The programs mystat and find were written with the same calls that ls uses: open, read of directory entries, stat or fstat and close. The test with -n confirmed that a hard link is the same inode under another name, while files with the same name in different directories are different inodes.
 
-Lab 6 found the same ideas in xv6 in a much smaller form: a directory is a file of 16-byte entries, an inode has type, nlink, size and 13 block addresses, `unlink` decrements nlink and `iput` frees the blocks when nothing refers to the inode any more. The constants in fs.h fix the limits (14-character names, 268 KiB files, 2000-block disk). Writing `mystat` and a recursive `find` used exactly the calls `ls` uses: open, read of dirents, stat/fstat and close.
+## REFERENCES
+
+1. Inside the xv6 File System. Laboratory Work 6, Operating Systems course. FCIM, Technical University of Moldova, 2026.
+2. COX, R., KAASHOEK, F., MORRIS, R. xv6: a simple, Unix-like teaching operating system [online]. MIT, 2024. Available: https://pdos.csail.mit.edu/6.1810/2024/xv6/book-riscv-rev4.pdf
+3. xv6 for RISC-V. Source code repository, MIT PDOS [online]. Available: https://github.com/mit-pdos/xv6-riscv
+4. Lab: Xv6 and Unix utilities. MIT 6.1810 Operating System Engineering [online]. Available: https://pdos.csail.mit.edu/6.1810/2024/labs/util.html
