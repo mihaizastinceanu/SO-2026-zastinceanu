@@ -1,0 +1,421 @@
+From 9711ead249349538a8a478f156fe599989051313 Mon Sep 17 00:00:00 2001
+From: Zastinceanu Mihai <zasmih05@gmail.com>
+Date: Mon, 2 Nov 2026 16:21:46 +0200
+Subject: [PATCH 1/3] Lab 10: trace system call, user side (number 23, stub,
+ user/trace.c)
+
+---
+ Makefile         |  1 +
+ kernel/syscall.h |  1 +
+ user/trace.c     | 19 +++++++++++++++++++
+ user/user.h      |  1 +
+ user/usys.pl     |  1 +
+ 5 files changed, 23 insertions(+)
+ create mode 100644 user/trace.c
+
+diff --git a/Makefile b/Makefile
+index 64726c2..ed785bf 100644
+--- a/Makefile
++++ b/Makefile
+@@ -146,6 +146,7 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
++	$U/_trace\
+ 	$U/_logstress\
+ 	$U/_forphan\
+ 	$U/_dorphan\
+diff --git a/kernel/syscall.h b/kernel/syscall.h
+index 5a4a39f..f66fb28 100644
+--- a/kernel/syscall.h
++++ b/kernel/syscall.h
+@@ -21,3 +21,4 @@
+ #define SYS_mkdir  20
+ #define SYS_close  21
+ #define SYS_sync   22
++#define SYS_trace  23
+diff --git a/user/trace.c b/user/trace.c
+new file mode 100644
+index 0000000..5c7a5df
+--- /dev/null
++++ b/user/trace.c
+@@ -0,0 +1,19 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "user/user.h"
++
++int
++main(int argc, char *argv[])
++{
++  if (argc < 3) {
++    fprintf(2, "usage: trace mask command [args...]\n");
++    exit(1);
++  }
++  if (trace(atoi(argv[1])) < 0) {
++    fprintf(2, "trace: failed\n");
++    exit(1);
++  }
++  exec(argv[2], argv + 2);
++  fprintf(2, "trace: exec %s failed\n", argv[2]);
++  exit(1);
++}
+diff --git a/user/user.h b/user/user.h
+index 29aad59..b8002ab 100644
+--- a/user/user.h
++++ b/user/user.h
+@@ -25,6 +25,7 @@ char *sys_sbrk(int, int);
+ int pause(int);
+ int uptime(void);
+ int sync(void);
++int trace(int);
+ 
+ // ulib.c
+ int stat(const char *, struct stat *);
+diff --git a/user/usys.pl b/user/usys.pl
+index 4d054e8..f9185b5 100755
+--- a/user/usys.pl
++++ b/user/usys.pl
+@@ -43,3 +43,4 @@ entry("sbrk");
+ entry("pause");
+ entry("uptime");
+ entry("sync");
++entry("trace");
+-- 
+2.53.0
+
+
+From 3be1329e94c2fb8f8fed9621865bf0a20c41c608 Mon Sep 17 00:00:00 2001
+From: Zastinceanu Mihai <zasmih05@gmail.com>
+Date: Mon, 2 Nov 2026 16:21:46 +0200
+Subject: [PATCH 2/3] Lab 10: trace system call, kernel side (handler, table,
+ names, fork)
+
+---
+ kernel/proc.c    |  1 +
+ kernel/proc.h    |  1 +
+ kernel/syscall.c | 17 +++++++++++++++++
+ kernel/sysproc.c |  9 +++++++++
+ 4 files changed, 28 insertions(+)
+
+diff --git a/kernel/proc.c b/kernel/proc.c
+index 31f23a3..b938cfd 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -288,6 +288,7 @@ kfork(void)
+   np->cwd = idup(p->cwd);
+ 
+   safestrcpy(np->name, p->name, sizeof(p->name));
++  np->trace_mask = p->trace_mask;
+ 
+   pid = np->pid;
+ 
+diff --git a/kernel/proc.h b/kernel/proc.h
+index 5603697..d7f68a6 100644
+--- a/kernel/proc.h
++++ b/kernel/proc.h
+@@ -101,4 +101,5 @@ struct proc {
+   struct file *ofile[NOFILE];  // Open files
+   struct inode *cwd;           // Current directory
+   char name[16];               // Process name (debugging)
++  int trace_mask;              // which system calls to print
+ };
+diff --git a/kernel/syscall.c b/kernel/syscall.c
+index 1800f20..4991849 100644
+--- a/kernel/syscall.c
++++ b/kernel/syscall.c
+@@ -103,6 +103,7 @@ extern uint64 sys_link(void);
+ extern uint64 sys_mkdir(void);
+ extern uint64 sys_close(void);
+ extern uint64 sys_sync(void);
++extern uint64 sys_trace(void);
+ 
+ // An array mapping syscall numbers from syscall.h
+ // to the function that handles the system call.
+@@ -130,9 +131,22 @@ static uint64 (*syscalls[])(void) = {
+   [SYS_mkdir]   = sys_mkdir,
+   [SYS_close]   = sys_close,
+   [SYS_sync]    = sys_sync,
++  [SYS_trace]   = sys_trace,
+   // clang-format on
+ };
+ 
++// the names of the system calls, for trace
++static char *syscallnames[] = {
++  [SYS_fork] "fork",   [SYS_exit] "exit",     [SYS_wait] "wait",
++  [SYS_pipe] "pipe",   [SYS_read] "read",     [SYS_kill] "kill",
++  [SYS_exec] "exec",   [SYS_fstat] "fstat",   [SYS_chdir] "chdir",
++  [SYS_dup] "dup",     [SYS_getpid] "getpid", [SYS_sbrk] "sbrk",
++  [SYS_pause] "pause", [SYS_uptime] "uptime", [SYS_open] "open",
++  [SYS_write] "write", [SYS_mknod] "mknod",   [SYS_unlink] "unlink",
++  [SYS_link] "link",   [SYS_mkdir] "mkdir",   [SYS_close] "close",
++  [SYS_sync] "sync",   [SYS_trace] "trace",
++};
++
+ void
+ syscall(void)
+ {
+@@ -144,6 +158,9 @@ syscall(void)
+     // Use num to lookup the system call function for num, call it,
+     // and store its return value in p->trapframe->a0
+     p->trapframe->a0 = syscalls[num]();
++    if((p->trace_mask >> num) & 1)
++      printk("%d: syscall %s -> %ld\n",
++             p->pid, syscallnames[num], p->trapframe->a0);
+   } else {
+     printk("%d %s: unknown sys call %d\n", p->pid, p->name, num);
+     p->trapframe->a0 = -1;
+diff --git a/kernel/sysproc.c b/kernel/sysproc.c
+index cd25557..f3b5d40 100644
+--- a/kernel/sysproc.c
++++ b/kernel/sysproc.c
+@@ -110,3 +110,12 @@ sys_uptime(void)
+   release(&tickslock);
+   return xticks;
+ }
++
++uint64
++sys_trace(void)
++{
++  int mask;
++  argint(0, &mask);
++  myproc()->trace_mask = mask;
++  return 0;
++}
+-- 
+2.53.0
+
+
+From d80c4e0674649e467a9971111c4aa1fd1b4ecee3 Mon Sep 17 00:00:00 2001
+From: Zastinceanu Mihai <zasmih05@gmail.com>
+Date: Mon, 2 Nov 2026 16:21:46 +0200
+Subject: [PATCH 3/3] Lab 10 optional: sysinfo system call (free memory,
+ processes in use)
+
+---
+ Makefile         |  1 +
+ kernel/defs.h    |  2 ++
+ kernel/kalloc.c  | 14 ++++++++++++++
+ kernel/proc.c    | 16 ++++++++++++++++
+ kernel/syscall.c |  4 +++-
+ kernel/syscall.h |  1 +
+ kernel/sysinfo.h |  4 ++++
+ kernel/sysproc.c | 15 +++++++++++++++
+ user/sysinfo.c   | 18 ++++++++++++++++++
+ user/user.h      |  2 ++
+ user/usys.pl     |  1 +
+ 11 files changed, 77 insertions(+), 1 deletion(-)
+ create mode 100644 kernel/sysinfo.h
+ create mode 100644 user/sysinfo.c
+
+diff --git a/Makefile b/Makefile
+index ed785bf..57aecaa 100644
+--- a/Makefile
++++ b/Makefile
+@@ -147,6 +147,7 @@ UPROGS=\
+ 	$U/_wc\
+ 	$U/_zombie\
+ 	$U/_trace\
++	$U/_sysinfo\
+ 	$U/_logstress\
+ 	$U/_forphan\
+ 	$U/_dorphan\
+diff --git a/kernel/defs.h b/kernel/defs.h
+index 0ae6896..6c66c4e 100644
+--- a/kernel/defs.h
++++ b/kernel/defs.h
+@@ -60,6 +60,7 @@ void            ireclaim(int);
+ void*           kalloc(void);
+ void            kfree(void *);
+ void            kinit(void);
++uint64          kfreemem(void);
+ 
+ // log.c
+ void            initlog(int, struct superblock*);
+@@ -103,6 +104,7 @@ void            yield(void);
+ int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
+ int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
+ void            procdump(void);
++uint64          nproc_used(void);
+ 
+ // swtch.S
+ void            swtch(struct context*, struct context*);
+diff --git a/kernel/kalloc.c b/kernel/kalloc.c
+index 2fcec38..2b5c7bc 100644
+--- a/kernel/kalloc.c
++++ b/kernel/kalloc.c
+@@ -80,3 +80,17 @@ kalloc(void)
+     memset((char *)r, 5, PGSIZE); // fill with junk
+   return (void *)r;
+ }
++
++// Count the free pages on the free list, in bytes.
++uint64
++kfreemem(void)
++{
++  struct run *r;
++  uint64 n = 0;
++
++  acquire(&kmem.lock);
++  for (r = kmem.freelist; r; r = r->next)
++    n += PGSIZE;
++  release(&kmem.lock);
++  return n;
++}
+diff --git a/kernel/proc.c b/kernel/proc.c
+index b938cfd..1997e10 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -702,3 +702,19 @@ procdump(void)
+     printk("\n");
+   }
+ }
++
++// Count the processes whose state is not UNUSED.
++uint64
++nproc_used(void)
++{
++  struct proc *p;
++  uint64 n = 0;
++
++  for (p = proc; p < &proc[NPROC]; p++) {
++    acquire(&p->lock);
++    if (p->state != UNUSED)
++      n++;
++    release(&p->lock);
++  }
++  return n;
++}
+diff --git a/kernel/syscall.c b/kernel/syscall.c
+index 4991849..82768bb 100644
+--- a/kernel/syscall.c
++++ b/kernel/syscall.c
+@@ -104,6 +104,7 @@ extern uint64 sys_mkdir(void);
+ extern uint64 sys_close(void);
+ extern uint64 sys_sync(void);
+ extern uint64 sys_trace(void);
++extern uint64 sys_sysinfo(void);
+ 
+ // An array mapping syscall numbers from syscall.h
+ // to the function that handles the system call.
+@@ -132,6 +133,7 @@ static uint64 (*syscalls[])(void) = {
+   [SYS_close]   = sys_close,
+   [SYS_sync]    = sys_sync,
+   [SYS_trace]   = sys_trace,
++  [SYS_sysinfo] = sys_sysinfo,
+   // clang-format on
+ };
+ 
+@@ -144,7 +146,7 @@ static char *syscallnames[] = {
+   [SYS_pause] "pause", [SYS_uptime] "uptime", [SYS_open] "open",
+   [SYS_write] "write", [SYS_mknod] "mknod",   [SYS_unlink] "unlink",
+   [SYS_link] "link",   [SYS_mkdir] "mkdir",   [SYS_close] "close",
+-  [SYS_sync] "sync",   [SYS_trace] "trace",
++  [SYS_sync] "sync",   [SYS_trace] "trace",   [SYS_sysinfo] "sysinfo",
+ };
+ 
+ void
+diff --git a/kernel/syscall.h b/kernel/syscall.h
+index f66fb28..3b769fd 100644
+--- a/kernel/syscall.h
++++ b/kernel/syscall.h
+@@ -22,3 +22,4 @@
+ #define SYS_close  21
+ #define SYS_sync   22
+ #define SYS_trace  23
++#define SYS_sysinfo 24
+diff --git a/kernel/sysinfo.h b/kernel/sysinfo.h
+new file mode 100644
+index 0000000..2622261
+--- /dev/null
++++ b/kernel/sysinfo.h
+@@ -0,0 +1,4 @@
++struct sysinfo {
++  uint64 freemem;   // amount of free memory (bytes)
++  uint64 nproc;     // number of processes in use
++};
+diff --git a/kernel/sysproc.c b/kernel/sysproc.c
+index f3b5d40..c286776 100644
+--- a/kernel/sysproc.c
++++ b/kernel/sysproc.c
+@@ -6,6 +6,7 @@
+ #include "spinlock.h"
+ #include "proc.h"
+ #include "vm.h"
++#include "sysinfo.h"
+ 
+ uint64
+ sys_exit(void)
+@@ -119,3 +120,17 @@ sys_trace(void)
+   myproc()->trace_mask = mask;
+   return 0;
+ }
++
++uint64
++sys_sysinfo(void)
++{
++  uint64 addr;
++  struct sysinfo info;
++
++  argaddr(0, &addr);
++  info.freemem = kfreemem();
++  info.nproc = nproc_used();
++  if (either_copyout(1, addr, &info, sizeof(info)) < 0)
++    return -1;
++  return 0;
++}
+diff --git a/user/sysinfo.c b/user/sysinfo.c
+new file mode 100644
+index 0000000..574975f
+--- /dev/null
++++ b/user/sysinfo.c
+@@ -0,0 +1,18 @@
++#include "kernel/types.h"
++#include "kernel/sysinfo.h"
++#include "user/user.h"
++
++// sysinfo: print the free memory and the number of processes in use
++int
++main(int argc, char *argv[])
++{
++  struct sysinfo info;
++
++  if (sysinfo(&info) < 0) {
++    fprintf(2, "sysinfo: failed\n");
++    exit(1);
++  }
++  printf("free memory: %lu bytes (%lu pages)\n", info.freemem, info.freemem / 4096);
++  printf("processes in use: %lu\n", info.nproc);
++  exit(0);
++}
+diff --git a/user/user.h b/user/user.h
+index b8002ab..4b02e56 100644
+--- a/user/user.h
++++ b/user/user.h
+@@ -1,6 +1,7 @@
+ #define SBRK_ERROR ((char *)-1)
+ 
+ struct stat;
++struct sysinfo;
+ 
+ // system calls
+ int fork(void);
+@@ -26,6 +27,7 @@ int pause(int);
+ int uptime(void);
+ int sync(void);
+ int trace(int);
++int sysinfo(struct sysinfo *);
+ 
+ // ulib.c
+ int stat(const char *, struct stat *);
+diff --git a/user/usys.pl b/user/usys.pl
+index f9185b5..a49625b 100755
+--- a/user/usys.pl
++++ b/user/usys.pl
+@@ -44,3 +44,4 @@ entry("pause");
+ entry("uptime");
+ entry("sync");
+ entry("trace");
++entry("sysinfo");
+-- 
+2.53.0
+
