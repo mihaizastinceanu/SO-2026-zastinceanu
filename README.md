@@ -12,6 +12,8 @@ Zastinceanu Mihai, FAF-243 (FCIM / FAF, Technical University of Moldova)
 | lab6/ | 6. Inside the xv6 File System | Lab5-6_ZastinceanuMihai_FAF-243.docx (labs 5 and 6), mystat.c, find.c, Makefile, notes.md |
 | lab7/ | 7. Three Small Programs (Linux) | run.c, zombie.c, redirect.c, pipeline.c, pipeline3.c, report.md |
 | lab8/ | 8. The Same Calls Inside Your Own OS (xv6) | Lab7-8_ZastinceanuMihai_FAF-243.docx (labs 7 and 8), run.c, pingpong.c, primes.c, Makefile, notes.md |
+| lab9/ | 9. Watching System Calls with strace (Linux) | Lab9_ZastinceanuMihai_FAF-243.docx, syscalls.c, count.c, report.md, img/ |
 
 The xv6 programs go into `~/xv6-riscv/user/`; each Makefile contains the UPROGS lines up to that lab.
 Lab 3: `bash oneliners.sh` and `./report.sh access.log` run inside `~/os-lab3`.
+Lab 9: `gcc -Wall -Wextra -o syscalls syscalls.c` and `strace -e trace=openat,write,read,close ./syscalls`.
