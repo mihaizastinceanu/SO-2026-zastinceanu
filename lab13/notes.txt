@@ -1,0 +1,58 @@
+Lab 13 - Semaphores in Your Own Kernel (xv6)
+Zastinceanu Mihai, FAF-243
+
+Kernel: ~/xv6-riscv, branch riscv (on top of trace from Lab 10), QEMU with 3 CPUs.
+New system calls: sem_init = 24, sem_down = 25, sem_up = 26 (optional sem_trydown = 27).
+The Lab 10 optional call sysinfo used to be 24; it was moved to 28 so the numbers of the lab are exact.
+
+Check 1 (user side only): "3 semtest: unknown sys call 24", "4 semtest: unknown sys call 25",
+then "child: I ran after the parent" BEFORE "parent: done, I let the child go".
+Check 2 (kernel/sem.c added): parent line first, then child, ping 1/pong 1 ... ping 3/pong 3, "semtest: OK".
+mix: letters of the two processes mixed in every run; mix lock: 5 whole lines of A, then 5 whole lines of b.
+Optional: trydown prints 0, -1, 0 (after sem_up), -1 (bad id 9), and never sleeps.
+
+Observe answers
+---------------
+
+1. Without the lock, why do the letters mix? (How many system calls does one line cost?)
+
+   mix writes one letter per write(), so one line of 30 letters plus the newline costs 31 write
+   system calls (5 lines = 155 calls per process). Each call is a separate trip into the kernel, and
+   between any two of them the other process can write its own letters: make qemu starts xv6 with
+   3 CPUs, so the parent and the child really run at the same time on different harts, and the
+   scheduler can also switch them at a timer interrupt. Nothing keeps the 31 calls of one line
+   together, so the console receives the letters of A and b interleaved.
+
+2. With the lock every line is whole. Which two lines of mix.c make one line a critical section?
+
+       if (uselock)
+           sem_down(3);        // before the loop of write() calls
+       ...
+       if (uselock)
+           sem_up(3);          // after the newline of the line was written
+
+   Semaphore 3 is started at 1 by sem_init(3, 1), so sem_down(3) lets only one process into the
+   loop that writes one line; the other sleeps in the kernel until sem_up(3). The whole line (31
+   write calls) is the critical section.
+
+3. In sem_down the test is "while (s->value == 0)", not "if". Why can a process wake up and still
+   find 0?
+
+   sem_up adds only one unit but wakeup(s) wakes ALL processes that sleep on the address s. The
+   first one that re-acquires s->lock takes the unit (value 1 -> 0); the others get the lock after
+   it and find 0 again, so they must test again and go back to sleep. A process that was not even
+   sleeping can also call sem_down between the wakeup and the moment the woken process gets the
+   lock, and take the unit first. Besides, sleep() returns at once if a wakeup on s came between
+   sleep_prepare and sleep (possibly for a unit already taken), and a kill also makes the process
+   runnable. So waking up means only "something changed", not "the value is now positive".
+
+4. sem_down calls release(&s->lock) BEFORE sleep(). What would go wrong if it slept holding the
+   spinlock?
+
+   sem_up needs the same spinlock to increase the value and call wakeup(s). If the sleeper kept
+   s->lock, the process that wants to call sem_up would spin forever in acquire(&s->lock), so the
+   wakeup would never come: a deadlock, the sleeper waits for sem_up and sem_up waits for the lock
+   of the sleeper. The CPU that spins also has interrupts turned off (acquire calls push_off), so
+   that hart is lost for everything else. In our xv6 it would not even get that far: sched() checks
+   that the only lock held is p->lock (mycpu()->noff == 1) and panics with "sched locks" if the
+   process tries to sleep while it still holds another spinlock.
