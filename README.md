@@ -15,9 +15,11 @@ Zastinceanu Mihai, FAF-243 (FCIM / FAF, Technical University of Moldova)
 | lab9/ | 9. Watching System Calls with strace (Linux) | Lab9_ZastinceanuMihai_FAF-243.docx, syscalls.c, count.c, report.md, img/ |
 | lab10/ | 10. Add Your Own System Call: trace (xv6) | Lab10_ZastinceanuMihai_FAF-243.docx, kernel/ and user/ (the modified xv6 files), trace.patch, Makefile, notes.md, img/ |
 | lab11/ | 11. The Race and the Semaphore (Linux) | Lab11_ZastinceanuMihai_FAF-243.docx, race.c, mutex.c, sem.c, order.c, parking.c, atomic.c (optional), report.md, img/ |
+| lab12/ | 12. Producer, Consumer and the Other Tools (Linux) | Lab12_ZastinceanuMihai_FAF-243.docx, prodcons.c, condvar.c, readers.c, deadlock.c (the fixed version), report.md, img/ |
 
 The xv6 programs go into `~/xv6-riscv/user/`; each Makefile contains the UPROGS lines up to that lab.
 Lab 3: `bash oneliners.sh` and `./report.sh access.log` run inside `~/os-lab3`.
 Lab 9: `gcc -Wall -Wextra -o syscalls syscalls.c` and `strace -e trace=openat,write,read,close ./syscalls`.
 Lab 10: the kernel changes are in `trace.patch`; apply them in `~/xv6-riscv` with `git am ~/os-2026-ZastinceanuMihai/lab10/trace.patch`.
 Lab 11: inside `~/os-lab11`, `gcc -Wall -pthread -o race race.c` (no -O2), the same for mutex, sem, order, parking and atomic.
+Lab 12: inside `~/os-lab12`, `gcc -Wall -pthread -o prodcons prodcons.c` (and condvar, readers, deadlock); `timeout 5 ./deadlock; echo "exit code: $?"`.
