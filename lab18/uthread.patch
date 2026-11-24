@@ -1,0 +1,270 @@
+From c291903c93bd0ef84df7ab08af0a4a13d300b204 Mon Sep 17 00:00:00 2001
+From: Zastinceanu Mihai <zasmih05@gmail.com>
+Date: Tue, 24 Nov 2026 12:00:30 +0200
+Subject: [PATCH] Lab 18: user-level threads (uthread.c, uthread_switch.S,
+ _uthread in Makefile)
+
+---
+ Makefile              |   5 ++
+ user/uthread.c        | 178 ++++++++++++++++++++++++++++++++++++++++++
+ user/uthread_switch.S |  43 ++++++++++
+ 3 files changed, 226 insertions(+)
+ create mode 100644 user/uthread.c
+ create mode 100644 user/uthread_switch.S
+
+diff --git a/Makefile b/Makefile
+index f5b9a9a..35fedc7 100644
+--- a/Makefile
++++ b/Makefile
+@@ -163,6 +163,7 @@ UPROGS=\
+ 	$U/_find\
+ 	$U/_run\
+ 	$U/_primes\
++	$U/_uthread\
+ 
+ fs.img: mkfs/mkfs README $(UPROGS)
+ 	mkfs/mkfs fs.img README $(UPROGS)
+@@ -215,3 +216,7 @@ check-qemu-version:
+ .PHONY: fmt
+ fmt:
+ 	clang-format -i $(wildcard kernel/*.[ch] user/*.[ch] mkfs/*.c)
++
++$U/_uthread: $U/uthread.o $U/uthread_switch.o $(ULIB) $U/user.ld
++	$(LD) $(LDFLAGS) -T $U/user.ld -o $U/_uthread $U/uthread.o $U/uthread_switch.o $(ULIB)
++	$(OBJDUMP) -S $U/_uthread > $U/uthread.asm
+diff --git a/user/uthread.c b/user/uthread.c
+new file mode 100644
+index 0000000..7b1aec4
+--- /dev/null
++++ b/user/uthread.c
+@@ -0,0 +1,178 @@
++#include "kernel/types.h"
++#include "user/user.h"
++
++/* Possible states of a thread: */
++#define FREE        0x0
++#define RUNNING     0x1
++#define RUNNABLE    0x2
++
++#define STACK_SIZE  8192
++#define MAX_THREAD  4
++
++/* the registers a thread must keep across a switch (callee-saved) */
++struct context {
++  uint64 ra;        /* offset   0: where thread_switch returns to */
++  uint64 sp;        /* offset   8: the thread's own stack pointer */
++  uint64 s0;        /* offset  16 */
++  uint64 s1;        /* offset  24 */
++  uint64 s2;        /* offset  32 */
++  uint64 s3;        /* offset  40 */
++  uint64 s4;        /* offset  48 */
++  uint64 s5;        /* offset  56 */
++  uint64 s6;        /* offset  64 */
++  uint64 s7;        /* offset  72 */
++  uint64 s8;        /* offset  80 */
++  uint64 s9;        /* offset  88 */
++  uint64 s10;       /* offset  96 */
++  uint64 s11;       /* offset 104 */
++};
++
++struct thread {
++  struct context ctx;                           /* saved registers */
++  char       stack[STACK_SIZE] __attribute__((aligned(16)));  /* own stack */
++  int        state;                             /* FREE, RUNNING, RUNNABLE */
++};
++struct thread all_thread[MAX_THREAD];
++struct thread *current_thread;
++extern void thread_switch(struct context *old, struct context *new);
++
++void
++thread_init(void)
++{
++  /* main() is thread 0: it will run first */
++  current_thread = &all_thread[0];
++  current_thread->state = RUNNING;
++}
++
++void
++thread_schedule(void)
++{
++  struct thread *t, *next_thread;
++
++  /* find another runnable thread, round robin */
++  next_thread = 0;
++  t = current_thread + 1;
++  for(int i = 0; i < MAX_THREAD; i++){
++    if(t >= all_thread + MAX_THREAD)
++      t = all_thread;
++    if(t->state == RUNNABLE) {
++      next_thread = t;
++      break;
++    }
++    t = t + 1;
++  }
++
++  if (next_thread == 0) {
++    printf("thread_schedule: no runnable threads\n");
++    exit(-1);
++  }
++
++  if (current_thread != next_thread) {         /* switch threads?  */
++    struct thread *old = current_thread;
++    next_thread->state = RUNNING;
++    current_thread = next_thread;
++    /* save our registers in old->ctx, load the ones of next_thread;
++       the call "returns" inside next_thread */
++    thread_switch(&old->ctx, &next_thread->ctx);
++  }
++}
++
++void
++thread_create(void (*func)())
++{
++  struct thread *t;
++
++  for (t = all_thread; t < all_thread + MAX_THREAD; t++) {
++    if (t->state == FREE) break;
++  }
++  t->state = RUNNABLE;
++  /* the first thread_switch into t loads ra and sp from here:
++     "ret" jumps to func, which runs on the top of t's own stack
++     (the stack grows down, so the top is the END of the array) */
++  t->ctx.ra = (uint64)func;
++  t->ctx.sp = (uint64)(t->stack + STACK_SIZE);
++}
++
++void
++thread_yield(void)
++{
++  current_thread->state = RUNNABLE;
++  thread_schedule();
++}
++
++volatile int a_started, b_started, c_started;
++volatile int a_n, b_n, c_n;
++
++void
++thread_a(void)
++{
++  int i;
++  printf("thread_a started\n");
++  a_started = 1;
++  while(b_started == 0 || c_started == 0)
++    thread_yield();
++
++  for (i = 0; i < 100; i++) {
++    printf("thread_a %d\n", i);
++    a_n += 1;
++    thread_yield();
++  }
++  printf("thread_a: exit after %d\n", a_n);
++
++  current_thread->state = FREE;
++  thread_schedule();
++}
++
++void
++thread_b(void)
++{
++  int i;
++  printf("thread_b started\n");
++  b_started = 1;
++  while(a_started == 0 || c_started == 0)
++    thread_yield();
++
++  for (i = 0; i < 100; i++) {
++    printf("thread_b %d\n", i);
++    b_n += 1;
++    thread_yield();
++  }
++  printf("thread_b: exit after %d\n", b_n);
++
++  current_thread->state = FREE;
++  thread_schedule();
++}
++
++void
++thread_c(void)
++{
++  int i;
++  printf("thread_c started\n");
++  c_started = 1;
++  while(a_started == 0 || b_started == 0)
++    thread_yield();
++
++  for (i = 0; i < 100; i++) {
++    printf("thread_c %d\n", i);
++    c_n += 1;
++    thread_yield();
++  }
++  printf("thread_c: exit after %d\n", c_n);
++
++  current_thread->state = FREE;
++  thread_schedule();
++}
++
++int
++main(int argc, char *argv[])
++{
++  a_started = b_started = c_started = 0;
++  a_n = b_n = c_n = 0;
++  thread_init();
++  thread_create(thread_a);
++  thread_create(thread_b);
++  thread_create(thread_c);
++  current_thread->state = FREE;      /* main is done: only a, b, c remain */
++  thread_schedule();
++  exit(0);
++}
+diff --git a/user/uthread_switch.S b/user/uthread_switch.S
+new file mode 100644
+index 0000000..b834c66
+--- /dev/null
++++ b/user/uthread_switch.S
+@@ -0,0 +1,43 @@
++	.text
++
++/*
++ * void thread_switch(struct context *old, struct context *new);
++ *
++ * Save the callee-saved registers of the current thread in *old (a0),
++ * load the ones of the next thread from *new (a1), and return.
++ * Because ra and sp were just replaced, "ret" continues in the next
++ * thread, on its own stack. Same shape as swtch in kernel/swtch.S.
++ */
++	.globl thread_switch
++thread_switch:
++	sd ra, 0(a0)		# save current thread registers
++	sd sp, 8(a0)
++	sd s0, 16(a0)
++	sd s1, 24(a0)
++	sd s2, 32(a0)
++	sd s3, 40(a0)
++	sd s4, 48(a0)
++	sd s5, 56(a0)
++	sd s6, 64(a0)
++	sd s7, 72(a0)
++	sd s8, 80(a0)
++	sd s9, 88(a0)
++	sd s10, 96(a0)
++	sd s11, 104(a0)
++
++	ld ra, 0(a1)		# load next thread registers
++	ld sp, 8(a1)
++	ld s0, 16(a1)
++	ld s1, 24(a1)
++	ld s2, 32(a1)
++	ld s3, 40(a1)
++	ld s4, 48(a1)
++	ld s5, 56(a1)
++	ld s6, 64(a1)
++	ld s7, 72(a1)
++	ld s8, 80(a1)
++	ld s9, 88(a1)
++	ld s10, 96(a1)
++	ld s11, 104(a1)
++
++	ret			# return into the next thread
+-- 
+2.53.0
+

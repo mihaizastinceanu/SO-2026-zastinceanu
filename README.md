@@ -17,6 +17,8 @@ Zastinceanu Mihai, FAF-243 (FCIM / FAF, Technical University of Moldova)
 | lab11/ | 11. The Race and the Semaphore (Linux) | Lab11_ZastinceanuMihai_FAF-243.docx, race.c, mutex.c, sem.c, order.c, parking.c, atomic.c (optional), report.md, img/ |
 | lab12/ | 12. Producer, Consumer and the Other Tools (Linux) | Lab12_ZastinceanuMihai_FAF-243.docx, prodcons.c, condvar.c, readers.c, deadlock.c (the fixed version), report.md, img/ |
 | lab13/ | 13. Semaphores in Your Own Kernel (xv6) | Lab13_ZastinceanuMihai_FAF-243.docx, kernel/ and user/ (sem.c, semtest.c, mix.c, trydown.c and the changed xv6 files), semaphores.patch, Makefile, notes.txt, notes.md, img/ |
+| lab17/ | 17. Threads Share Memory, and Race (Linux) | Lab17_ZastinceanuMihai_FAF-243.docx, fire.c, fire4.c (Part 2, four threads), report.md, img/ |
+| lab18/ | 18. Build a User-Level Thread Switch (xv6) | Lab18_ZastinceanuMihai_FAF-243.docx, user/ (uthread.c, uthread_switch.S), uthread.patch, Makefile, notes.txt, notes.md, img/ |
 
 The xv6 programs go into `~/xv6-riscv/user/`; each Makefile contains the UPROGS lines up to that lab.
 Lab 3: `bash oneliners.sh` and `./report.sh access.log` run inside `~/os-lab3`.
@@ -25,3 +27,5 @@ Lab 10: the kernel changes are in `trace.patch`; apply them in `~/xv6-riscv` wit
 Lab 11: inside `~/os-lab11`, `gcc -Wall -pthread -o race race.c` (no -O2), the same for mutex, sem, order, parking and atomic.
 Lab 12: inside `~/os-lab12`, `gcc -Wall -pthread -o prodcons prodcons.c` (and condvar, readers, deadlock); `timeout 5 ./deadlock; echo "exit code: $?"`.
 Lab 13: apply the four commits in `~/xv6-riscv` with `git am ~/os-2026-ZastinceanuMihai/lab13/semaphores.patch`, then `make qemu` and run `semtest`, `mix`, `mix lock`, `trydown`. sem_init, sem_down, sem_up = 24, 25, 26, sem_trydown = 27 (sysinfo of Lab 10 moved to 28).
+Lab 17: inside `~/os-lab17`, `gcc -Wall -Wextra -pthread -o fire fire.c` (and fire4.c), run `./fire` and `./fire4` several times.
+Lab 18: apply the commit in `~/xv6-riscv` with `git am ~/os-2026-ZastinceanuMihai/lab18/uthread.patch`, then `make qemu` and run `uthread`.

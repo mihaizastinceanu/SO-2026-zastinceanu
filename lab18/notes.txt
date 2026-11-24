@@ -1,0 +1,44 @@
+Lab 18 - Build a User-Level Thread Switch (xv6)
+Zastinceanu Mihai, FAF-243
+
+Tree: ~/xv6-riscv, branch riscv (on top of Labs 10 and 13), commit "Lab 18: user-level threads".
+New files: user/uthread.c, user/uthread_switch.S; Makefile: $U/_uthread in UPROGS plus its own
+rule (uthread.o and uthread_switch.o linked together). No kernel file was changed.
+The same commit is in uthread.patch (git am uthread.patch).
+
+Result: uthread prints thread_a/b/c started, then thread_c 0, thread_a 0, thread_b 0, ...
+up to thread_b 99 (300 lines, strict turns c, a, b), then "exit after 100" for c, a, b and
+"thread_schedule: no runnable threads" - exactly the output of the handout.
+
+Observe answer
+--------------
+
+What exactly does thread_switch save and load?
+
+  thread_switch(old, new) gets two pointers: a0 = &old->ctx, a1 = &new->ctx. It stores 14
+  registers of the running thread into *old and loads 14 registers of the next thread from *new:
+
+      ra (offset 0), sp (8), s0 (16), s1 (24), ... s11 (104)        14 x 8 = 112 bytes
+
+  These are exactly the callee-saved registers of the RISC-V calling convention, plus ra and sp.
+  Nothing else is saved: thread_switch is called like a normal C function, so the compiler has
+  already saved the caller-saved registers (a0-a7, t0-t6) that the caller still needs on the
+  thread's own stack before the call. pc is not saved either: ra already says where to continue.
+  sp is what gives every thread its own stack: after "ld sp, 8(a1)" all the local variables,
+  return addresses and saved registers that the code uses belong to the next thread.
+
+Why is ra the register that makes execution continue in the other thread?
+
+  The last instruction of thread_switch is "ret", which is "jalr x0, 0(ra)": a jump to the
+  address that is in ra. Before ret, ra was replaced with the ra of the next thread, so ret does
+  not go back to the caller that called thread_switch, but to the place where the NEXT thread
+  called thread_switch last time (just after the call in its thread_schedule), on its own stack.
+  From there it returns from thread_schedule and thread_yield and goes on with its loop.
+  For a thread that has never run, thread_create put the address of the thread function in
+  ctx.ra and the top of its stack (t->stack + STACK_SIZE, the stack grows down) in ctx.sp, so the
+  first ret "returns" into the start of thread_a/b/c. Without that, ra = 0 and the first switch
+  jumps to address 0 ("jumps nowhere").
+
+Why c, a, b and not a, b, c: a runs first, sets a_started and yields (b, c not started); b does
+the same; c finds both flags set, prints "thread_c 0" and yields; then a and b leave their wait
+loop. After that the round robin keeps the order c, a, b until the end.
